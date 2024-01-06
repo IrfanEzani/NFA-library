@@ -2,224 +2,180 @@ open List
 open Nfa
 open Sets
 
-(*********)
-(* Types *)
-(*********)
+(* regex to NFA Converter *)
 
-type regexp_t =
-  | Empty_String
-  | Char of char
-  | Union of regexp_t * regexp_t
-  | Concat of regexp_t * regexp_t
-  | Star of regexp_t
+(* Type definition for regular expressions *)
+type regular_expression =
+  | EmptyString
+  | Character of char
+  | Union of regular_expression * regular_expression
+  | Concatenation of regular_expression * regular_expression
+  | Repetition of regular_expression
 
-(***********)
-(* Utility *)
-(***********)
-
-let fresh =
-  let cntr = ref 0 in
+(* Generates unique integers for state naming in NFA *)
+let generate_unique_state =
+  let counter = ref 0 in
   fun () ->
-    cntr := !cntr + 1 ;
-    !cntr
+    counter := !counter + 1 ;
+    !counter
 
-(*******************************)
-(* Part 3: Regular Expressions *)
-(*******************************)
-
-let nfa_fs fs = 
-  match fs with 
+(* Extracts the first final state from a list of final states *)
+let get_first_final_state final_states = 
+  match final_states with 
   | [] -> 0
-  | q::_ -> q;;
+  | state::_ -> state
 
-
-let rec regexp_to_nfa (regexp: regexp_t) : (int, char) nfa_t = 
+(* Converts a regular expression to an NFA *)
+let rec convert_regexp_to_nfa (regexp: regular_expression) : (int, char) nfa_t = 
   match regexp with
-  | Empty_String -> 
-    {
-      sigma = [];
-      q0 = 0;
-      qs = [0];
-      fs = [0];
-      delta = [];
+  | EmptyString -> 
+    { sigma = []; q0 = 0; qs = [0]; fs = [0]; delta = [] }
+
+  | Character c -> 
+    let start_state = generate_unique_state () in 
+    let end_state = generate_unique_state () in
+    { sigma = [c]; q0 = start_state; qs = [start_state; end_state]; fs = [end_state]; delta = [(start_state, Some c, end_state)] }
+
+  | Union(re1, re2) ->
+    let new_start = generate_unique_state () in 
+    let new_final = generate_unique_state () in 
+    let nfa1 = convert_regexp_to_nfa re1 in 
+    let nfa2 = convert_regexp_to_nfa re2 in 
+    let combined_states = new_start :: new_final :: nfa1.qs @ nfa2.qs in 
+    let combined_transitions = List.map (fun (q, a, q') -> (q, a, q')) (nfa1.delta @ nfa2.delta) in 
+    let new_transitions = combined_transitions @
+                          [ (new_start, None, nfa1.q0); 
+                            (new_start, None, nfa2.q0); 
+                            (get_first_final_state nfa1.fs, None, new_final); 
+                            (get_first_final_state nfa2.fs, None, new_final); 
+                          ] in 
+    { sigma = union nfa1.sigma nfa2.sigma; q0 = new_start; qs = combined_states; fs = [new_final]; delta = new_transitions }
+
+  | Concatenation(re1, re2) -> 
+    let nfa1 = convert_regexp_to_nfa re1 in 
+    let nfa2 = convert_regexp_to_nfa re2 in 
+    { sigma = union nfa1.sigma nfa2.sigma;
+      q0 = nfa1.q0;
+      qs = union nfa1.qs nfa2.qs;
+      fs = nfa2.fs;
+      delta = union (union nfa1.delta nfa2.delta) [(get_first_final_state nfa1.fs, None, nfa2.q0)]
     }
 
-  | Char c -> let initial = fresh () in 
-              let final = fresh () in
-              let delta = [(initial, Some c, final)] in
-              let qs = [initial; final] in
-              let sigma = [c] in
-              let fs = [final] in
-              { sigma; q0 = initial; qs; fs; delta }
+  | Repetition re -> 
+    let start_state = generate_unique_state () in
+    let end_state = generate_unique_state () in
+    let nfa = convert_regexp_to_nfa re in
+    { sigma = nfa.sigma;
+      qs = start_state :: end_state :: nfa.qs;
+      q0 = start_state;
+      fs = [end_state];
+      delta = (start_state, None, end_state) ::
+              (start_state, None, nfa.q0) ::
+              List.map (fun q -> (q, None, end_state)) nfa.fs @
+              List.map (fun q -> (q, None, nfa.q0)) nfa.fs @
+              nfa.delta
+    }
 
-  
-  | Union(re1, re2) ->let curr = fresh () in 
-                      let final = fresh () in 
-                      let nfa_1 = regexp_to_nfa re1 in 
-                      let nfa_2 = regexp_to_nfa re2 in 
-                      let qs = curr :: final :: nfa_1.qs @ nfa_2.qs in 
+(* Exception for invalid regular expressions *)
+exception InvalidRegularExpression of string
 
-                      let delta_1 = List.map (fun (q, a, q') -> (q, a, q')) nfa_1.delta in 
-                      let delta_2 = List.map (fun (q, a, q') -> (q, a, q')) nfa_2.delta in 
-                      let delta = delta_1 @ delta_2 @
-                                  [ (curr, None, nfa_1.q0); 
-                                    (curr, None, nfa_2.q0); 
-                                    (nfa_fs nfa_1.fs, None, final); 
-                                    (nfa_fs nfa_2.fs, None, final); 
-                                  ] in 
-                                  
-                      let sigma = union nfa_1.sigma nfa_2.sigma in 
-                      {
-                        sigma; 
-                        q0 = curr; 
-                        qs;
-                        fs = [final]; 
-                        delta;
-                      }
-
-
-  | Concat(re1, re2) -> let nfa1 = (regexp_to_nfa re1) in 
-                        let nfa2 = (regexp_to_nfa re2) in 
-                            
-                            {
-                              sigma = union nfa1.sigma nfa2.sigma;
-                              q0 = nfa1.q0;
-                              qs = union nfa1.qs nfa2.qs;
-                              fs = nfa2.fs;
-                              delta = union (union nfa1.delta nfa2.delta) [(nfa_fs nfa1.fs, None, nfa2.q0)]
-                            }
-
-
-  | Star re -> let initial = fresh () in
-               let final = fresh () in
-               let nfa = regexp_to_nfa re in
-                  {
-                    sigma = nfa.sigma;
-                    qs = initial :: final :: nfa.qs;
-                    q0 = initial;
-                    fs = [final];
-                    delta =
-                      (initial, None, final) ::
-                      (initial, None, nfa.q0) ::
-                      List.map (fun q -> (q, None, final)) nfa.fs @
-                      List.map (fun q -> (q, None, nfa.q0)) nfa.fs @
-                      nfa.delta
-                  }
-
-
-
-
-
-(*****************************************************************)
-(* Below this point is parser code that YOU DO NOT NEED TO TOUCH *)
-(*****************************************************************)
-
-exception IllegalExpression of string
-
-(* Scanner *)
+(* Token types for regular expression parsing *)
 type token =
-  | Tok_Char of char
-  | Tok_Epsilon
-  | Tok_Union
-  | Tok_Star
-  | Tok_LParen
-  | Tok_RParen
-  | Tok_END
+  | TokenCharacter of char
+  | TokenEpsilon
+  | TokenUnion
+  | TokenRepetition
+  | TokenLeftParenthesis
+  | TokenRightParenthesis
+  | TokenEnd
 
-let tokenize str =
-  let re_var = Str.regexp "[a-z]" in
-  let re_epsilon = Str.regexp "E" in
-  let re_union = Str.regexp "|" in
-  let re_star = Str.regexp "*" in
-  let re_lparen = Str.regexp "(" in
-  let re_rparen = Str.regexp ")" in
-  let rec tok pos s =
-    if pos >= String.length s then [Tok_END]
-    else if Str.string_match re_var s pos then
-      let token = Str.matched_string s in
-      Tok_Char token.[0] :: tok (pos + 1) s
-    else if Str.string_match re_epsilon s pos then
-      Tok_Epsilon :: tok (pos + 1) s
-    else if Str.string_match re_union s pos then Tok_Union :: tok (pos + 1) s
-    else if Str.string_match re_star s pos then Tok_Star :: tok (pos + 1) s
-    else if Str.string_match re_lparen s pos then Tok_LParen :: tok (pos + 1) s
-    else if Str.string_match re_rparen s pos then Tok_RParen :: tok (pos + 1) s
-    else raise (IllegalExpression ("tokenize: " ^ s))
+(* Converts a token to a string representation *)
+let string_of_token token =
+  match token with
+  | TokenCharacter v -> Char.escaped v
+  | TokenEpsilon -> "Epsilon"
+  | TokenUnion -> "Union"
+  | TokenRepetition -> "Repetition"
+  | TokenLeftParenthesis -> "LeftParenthesis"
+  | TokenRightParenthesis -> "RightParenthesis"
+  | TokenEnd -> "End"
+
+(* Tokenizes a string into a list of tokens *)
+let tokenize_expression expression =
+  let regex_character = Str.regexp "[a-z]" in
+  let regex_epsilon = Str.regexp "E" in
+  let regex_union = Str.regexp "|" in
+  let regex_repetition = Str.regexp "*" in
+  let regex_left_parenthesis = Str.regexp "(" in
+  let regex_right_parenthesis = Str.regexp ")" in
+
+  let rec tokenize index expr =
+    if index >= String.length expr then [TokenEnd]
+    else if Str.string_match regex_character expr index then
+      TokenCharacter (expr.[index]) :: tokenize (index + 1) expr
+    else if Str.string_match regex_epsilon expr index then
+      TokenEpsilon :: tokenize (index + 1) expr
+    else if Str.string_match regex_union expr index then
+      TokenUnion :: tokenize (index + 1) expr
+    else if Str.string_match regex_repetition expr index then
+      TokenRepetition :: tokenize (index + 1) expr
+    else if Str.string_match regex_left_parenthesis expr index then
+      TokenLeftParenthesis :: tokenize (index + 1) expr
+    else if Str.string_match regex_right_parenthesis expr index then
+      TokenRightParenthesis :: tokenize (index + 1) expr
+    else raise (InvalidRegularExpression ("Invalid token in expression: " ^ expr))
   in
-  tok 0 str
+  tokenize 0 expression
 
-let tok_to_str t =
-  match t with
-  | Tok_Char v -> Char.escaped v
-  | Tok_Epsilon -> "E"
-  | Tok_Union -> "|"
-  | Tok_Star -> "*"
-  | Tok_LParen -> "("
-  | Tok_RParen -> ")"
-  | Tok_END -> "END"
+(* Parses a list of tokens into a regular expression *)
+let parse_regular_expression token_list =
+  let rec parse_union tokens =
+    let term, rest = parse_concatenation tokens in
+    match lookahead rest with
+    | TokenUnion, remainder -> 
+        let union_r, final = parse_union remainder in
+        (Union (term, union_r), final)
+    | _ -> (term, rest)
 
-(*
-   S -> A Tok_Union S | A
-   A -> B A | B
-   B -> C Tok_Star | C
-   C -> Tok_Char | Tok_Epsilon | Tok_LParen S Tok_RParen
+  and parse_concatenation tokens =
+    let factor, rest = parse_repetition tokens in
+    match lookahead rest with
+    | TokenCharacter _ | TokenEpsilon | TokenLeftParenthesis -> 
+        let concatenation_r, final = parse_concatenation rest in
+        (Concatenation (factor, concatenation_r), final)
+    | _ -> (factor, rest)
 
-   FIRST(S) = Tok_Char | Tok_Epsilon | Tok_LParen
-   FIRST(A) = Tok_Char | Tok_Epsilon | Tok_LParen
-   FIRST(B) = Tok_Char | Tok_Epsilon | Tok_LParen
-   FIRST(C) = Tok_Char | Tok_Epsilon | Tok_LParen
- *)
+  and parse_repetition tokens =
+    let base, rest = parse_base tokens in
+    match lookahead rest with
+    | TokenRepetition, remainder -> (Repetition base, remainder)
+    | _ -> (base, rest)
 
-let parse_regexp (l : token list) =
-  let lookahead tok_list =
-    match tok_list with
-    | [] -> raise (IllegalExpression "lookahead")
-    | h :: t -> (h, t)
+  and parse_base tokens =
+    match lookahead tokens with
+    | TokenCharacter c, rest -> (Character c, rest)
+    | TokenEpsilon, rest -> (EmptyString, rest)
+    | TokenLeftParenthesis, rest -> 
+        let expr, remainder = parse_union rest in
+        (match lookahead remainder with
+         | TokenRightParenthesis, final -> (expr, final)
+         | _ -> raise (InvalidRegularExpression "Missing right parenthesis"))
+    | _ -> raise (InvalidRegularExpression "Invalid base expression")
+
+  and lookahead tokens =
+    match tokens with
+    | [] -> raise (InvalidRegularExpression "Unexpected end of expression")
+    | head :: tail -> (head, tail)
+
   in
-  let rec parse_S l =
-    let a1, l1 = parse_A l in
-    let t, n = lookahead l1 in
-    match t with
-    | Tok_Union ->
-        let a2, l2 = parse_S n in
-        (Union (a1, a2), l2)
-    | _ -> (a1, l1)
-  and parse_A l =
-    let a1, l1 = parse_B l in
-    let t, n = lookahead l1 in
-    match t with
-    | Tok_Char c ->
-        let a2, l2 = parse_A l1 in
-        (Concat (a1, a2), l2)
-    | Tok_Epsilon ->
-        let a2, l2 = parse_A l1 in
-        (Concat (a1, a2), l2)
-    | Tok_LParen ->
-        let a2, l2 = parse_A l1 in
-        (Concat (a1, a2), l2)
-    | _ -> (a1, l1)
-  and parse_B l =
-    let a1, l1 = parse_C l in
-    let t, n = lookahead l1 in
-    match t with Tok_Star -> (Star a1, n) | _ -> (a1, l1)
-  and parse_C l =
-    let t, n = lookahead l in
-    match t with
-    | Tok_Char c -> (Char c, n)
-    | Tok_Epsilon -> (Empty_String, n)
-    | Tok_LParen ->
-        let a1, l1 = parse_S n in
-        let t2, n2 = lookahead l1 in
-        if t2 = Tok_RParen then (a1, n2)
-        else raise (IllegalExpression "parse_C 1")
-    | _ -> raise (IllegalExpression "parse_C 2")
-  in
-  let rxp, toks = parse_S l in
-  match toks with
-  | [Tok_END] -> rxp
-  | _ -> raise (IllegalExpression "parse didn't consume all tokens")
+  let parsed_expression, remaining_tokens = parse_union token_list in
+  if remaining_tokens = [TokenEnd] then parsed_expression
+  else raise (InvalidRegularExpression "Incomplete parsing of expression")
 
+(* Converts a string to a regular expression *)
+let string_to_regular_expression str = 
+  parse_regular_expression (tokenize_expression str)
 
-let string_to_regexp str = parse_regexp @@ tokenize str
-
-let string_to_nfa str = regexp_to_nfa @@ string_to_regexp str
+(* Converts a string directly to an NFA *)
+let string_to_nfa str = 
+  convert_regexp_to_nfa (string_to_regular_expression str)
