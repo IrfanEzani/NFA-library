@@ -1,136 +1,135 @@
-open List
-open Sets
+(* NFA (Non-deterministic Finite Automaton) Operations *)
 
-(*********)
-(* Types *)
-(*********)
+type ('state, 'symbol) transition = 'state * 'symbol option * 'state
 
-type ('q, 's) transition = 'q * 's option * 'q
-
-type ('q, 's) nfa_t = {
-  sigma: 's list;
-  qs: 'q list;
-  q0: 'q;
-  fs: 'q list;
-  delta: ('q, 's) transition list;
+type ('state, 'symbol) nfa = {
+  alphabet: 'symbol list;
+  states: 'state list;
+  initial_state: 'state;
+  final_states: 'state list;
+  transitions: ('state, 'symbol) transition list;
 }
 
-(***********)
-(* Utility *)
-(***********)
+(* Utility Functions *)
 
-(* explode converts a string to a character list *)
-let explode (s: string) : char list =
-  let rec exp i l =
-    if i < 0 then l else exp (i - 1) (s.[i] :: l)
+(* Converts a string to a list of characters *)
+let string_to_char_list (str: string) : char list =
+  let rec explode index result =
+    if index < 0 then result else explode (index - 1) (str.[index] :: result)
   in
-  exp (String.length s - 1) []
+  explode (String.length str - 1) []
 
-(****************)
-(* Part 1: NFAs *)
-(****************)
+(* NFA Operations *)
 
-(* return  list next states that we can reach from q using s. *)
-let rec get_next_states delta q s =
-  match delta with
+(* Retrieves a list of next states reachable from a given state with a specific symbol *)
+let rec find_next_states transitions current_state symbol =
+  match transitions with
   | [] -> []
-  | (state, input, next) :: rest ->
-      if state = q && input = s 
-        then next :: get_next_states rest q s
-      else get_next_states rest q s
+  | (state, transition_symbol, next_state) :: remaining_transitions ->
+      if state = current_state && transition_symbol = symbol 
+        then next_state :: find_next_states remaining_transitions current_state symbol
+      else find_next_states remaining_transitions current_state symbol
 
-
-
-let move (nfa: ('q,'s) nfa_t) (qs: 'q list) (s: 's option) : 'q list =
-  let rec move_aux qs acc =
-    match qs with
-    | [] -> acc
-    | q::rest ->
-        let next_states = get_next_states nfa.delta q s in
-        move_aux rest (union next_states acc)
+(* Moves the NFA to the next states based on the current states and a given symbol *)
+let transition_states (nfa: ('state, 'symbol) nfa) (current_states: 'state list) (symbol: 'symbol option) : 'state list =
+  let rec aux states accumulator =
+    match states with
+    | [] -> accumulator
+    | state::remaining_states ->
+        let next_states = find_next_states nfa.transitions state symbol in
+        aux remaining_states (union next_states accumulator)
   in
-  move_aux qs []
+  aux current_states []
 
-  
-  let e_closure (nfa: ('q,'s) nfa_t) (qs: 'q list) : 'q list =
-    let rec e_closure_aux qs a acc =
-    match qs with
-    | [] -> union acc a
-    | q::rest ->
-        let qs' = move nfa [q] None in
-        let new_states = diff qs' acc in
-        let acc' = insert_all qs' acc in
-        e_closure_aux (union rest new_states) (union a new_states) acc'
+(* Computes the epsilon closure of the given states *)
+let epsilon_closure (nfa: ('state, 'symbol) nfa) (states: 'state list) : 'state list =
+  let rec aux current_states new_states accumulator =
+    match current_states with
+    | [] -> union accumulator new_states
+    | state::remaining_states ->
+        let epsilon_reachable_states = transition_states nfa [state] None in
+        let newly_added_states = diff epsilon_reachable_states accumulator in
+        let updated_accumulator = insert_all epsilon_reachable_states accumulator in
+        aux (union remaining_states newly_added_states) (union new_states newly_added_states) updated_accumulator
   in
-  e_closure_aux qs qs []
+  aux states states []
 
-  
-let rec end_state nfa qs =
-  let rec end_state_aux qs =
-    match qs with
+(* Checks if any of the current states is a final state *)
+let is_accepting_state (nfa: ('state, 'symbol) nfa) (states: 'state list) : bool =
+  let rec check states =
+    match states with
     | [] -> false
-    | q::rest -> if (elem q nfa.fs) then true else (end_state_aux rest)
+    | state::remaining_states -> 
+      if elem state nfa.final_states then true else check remaining_states
   in
-  end_state_aux qs
+  check states
 
-let accept (nfa: ('q, char) nfa_t) (s: string) : bool =
-  let rec accept_aux cs qs =
-    match cs with
-    | [] -> end_state nfa qs
-    | c :: rest ->
-        let next_states = move nfa qs (Some c) in
-        let next_qs = e_closure nfa next_states in
-        accept_aux rest next_qs
+(* Determines if the NFA accepts a given string *)
+let nfa_accepts_string (nfa: ('state, char) nfa) (input_string: string) : bool =
+  let rec aux characters current_states =
+    match characters with
+    | [] -> is_accepting_state nfa current_states
+    | character :: remaining_characters ->
+        let next_states = transition_states nfa current_states (Some character) in
+        let epsilon_reachable_states = epsilon_closure nfa next_states in
+        aux remaining_characters epsilon_reachable_states
   in
-  accept_aux (explode s) (e_closure nfa [nfa.q0])
+  aux (string_to_char_list input_string) (epsilon_closure nfa [nfa.initial_state])
 
 
-(*******************************)
-(* Part 2: Subset Construction *)
-(*******************************)
-let new_states (nfa: ('q,'s) nfa_t) (qs: 'q list) : 'q list list = 
-  map (fun x -> e_closure nfa (move nfa qs (Some x))) nfa.sigma
+(* Conversion from NFA to DFA using Subset Construction *)
 
-let new_trans (nfa: ('q,'s) nfa_t) (qs: 'q list) : ('q list, 's) transition list =
-  fold_left (fun acc x -> (qs, x, (e_closure nfa (move nfa qs x)))::acc) [] (map (fun x -> Some x) nfa.sigma)
+(* Generates new states for the DFA based on the NFA's transitions *)
+let generate_dfa_states (nfa: ('state, 'symbol) nfa) (current_states: 'state list) : 'state list list = 
+  map (fun symbol -> epsilon_closure nfa (transition_states nfa current_states (Some symbol))) nfa.alphabet
 
-let new_finals (nfa: ('q,'s) nfa_t) (qs: 'q list) : 'q list list =
-  if (end_state nfa qs) then [qs] else []
+(* Generates new transitions for the DFA based on the NFA's transitions *)
+let generate_dfa_transitions (nfa: ('state, 'symbol) nfa) (current_states: 'state list) : (('state list, 'symbol) transition) list =
+  fold_left (fun accumulator symbol -> 
+    (current_states, symbol, 
+      (epsilon_closure nfa (transition_states nfa current_states (Some symbol)))
+    )::accumulator
+  ) [] (map (fun symbol -> Some symbol) nfa.alphabet)
 
+(* Determines the final states for the DFA *)
+let determine_dfa_final_states (nfa: ('state, 'symbol) nfa) (current_states: 'state list) : 'state list list =
+  if is_accepting_state nfa current_states then [current_states] else []
 
-let nfa_to_dfa_step nfa dfa marked_qs =
-  let rec loop dfa marked_qs acc_final =
-    match marked_qs with
-    | [] -> { sigma = dfa.sigma;
-              q0 = dfa.q0;
-              qs = dfa.qs @ acc_final;
-              fs = acc_final;
-              delta = dfa.delta }
+(* One step of NFA to DFA conversion *)
+let convert_nfa_to_dfa_step (nfa: ('state, 'symbol) nfa) (dfa: ('state list, 'symbol) nfa) (marked_states: 'state list list) =
+  let rec loop dfa marked_states accumulated_finals =
+    match marked_states with
+    | [] -> { alphabet = dfa.alphabet;
+              states = dfa.states @ accumulated_finals;
+              initial_state = dfa.initial_state;
+              final_states = accumulated_finals;
+              transitions = dfa.transitions }
 
-    | state::rest ->
-      let new_states = new_states nfa state in
-      let new_marked_qs = 
-        if subset new_states dfa.qs 
-          then rest else union new_states rest in
-      let new_finals = new_finals nfa state in
-      loop { sigma = dfa.sigma;
-             q0 = dfa.q0;
-             qs = union dfa.qs new_states;
-             fs = dfa.fs;
-             delta = union dfa.delta (new_trans nfa state) }
-           new_marked_qs (acc_final @ new_finals)
+    | state::remaining_states ->
+      let new_states = generate_dfa_states nfa state in
+      let new_marked_states = 
+        if subset new_states dfa.states 
+          then remaining_states else union new_states remaining_states in
+      let new_finals = determine_dfa_final_states nfa state in
+      loop { alphabet = dfa.alphabet;
+             initial_state = dfa.initial_state;
+             states = union dfa.states new_states;
+             final_states = dfa.final_states;
+             transitions = union dfa.transitions (generate_dfa_transitions nfa state) }
+           new_marked_states (accumulated_finals @ new_finals)
 
   in
-  let r0 = e_closure nfa [nfa.q0] in
-  loop { sigma = nfa.sigma;
-         q0 = r0;
-         qs = [r0];
-         fs = [];
-         delta = [] } [r0] (new_finals nfa r0)
+  let initial_dfa_state = epsilon_closure nfa [nfa.initial_state] in
+  loop { alphabet = nfa.alphabet;
+         initial_state = initial_dfa_state;
+         states = [initial_dfa_state];
+         final_states = [];
+         transitions = [] } [initial_dfa_state] (determine_dfa_final_states nfa initial_dfa_state)
 
-let nfa_to_dfa nfa =
-  nfa_to_dfa_step nfa { sigma = nfa.sigma;
-                        qs = [];
-                        q0 = [];
-                        fs = [];
-                        delta = [] } []
+(* Converts an NFA to a DFA *)
+let convert_nfa_to_dfa (nfa: ('state, 'symbol) nfa) =
+  convert_nfa_to_dfa_step nfa { alphabet = nfa.alphabet;
+                                states = [];
+                                initial_state = [];
+                                final_states = [];
+                                transitions = [] } []
