@@ -1,4 +1,4 @@
-# OCaml Regex Engine
+# Finite Automata Library
 
 This repository contains two OCaml modules for working with finite automata. These modules provide functionality for creating and manipulating non-deterministic finite automata (NFAs) and for converting regular expressions to NFAs.
 
